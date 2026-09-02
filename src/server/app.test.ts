@@ -9,7 +9,7 @@ test("returns JSON for malformed request bodies", async () => {
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("test server did not start");
   try {
-    const response = await fetch(`http://127.0.0.1:${address.port}/api/solve`, {
+    const response = await fetch(`http://127.0.0.1:${address.port}/features/twenty-four`, {
       method: "POST", headers: { "content-type": "application/json" }, body: "{\"numbers\":"
     });
 

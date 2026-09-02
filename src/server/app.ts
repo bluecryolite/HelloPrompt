@@ -1,8 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import { createServer } from "node:http";
-import { solveWithCopilot } from "./copilot.js";
-import { validateNumbers } from "./validation.js";
+import { solveTwentyFour } from "./features/twenty-four/solver.js";
+import { validateNumbers } from "./features/twenty-four/validation.js";
 
 export const app = express();
 const port = Number(process.env.PORT ?? 30001);
@@ -16,7 +16,7 @@ export function toErrorResponse(error: unknown): { status: number; body: { code:
 app.set("trust proxy", process.env.TRUST_PROXY === "true");
 app.use(express.json({ limit: "4kb" }));
 app.get("/api/health", (_, res) => res.json({ ok: true }));
-app.post("/api/solve", async (req, res) => {
+app.post("/features/twenty-four", async (req, res) => {
   const started = performance.now();
   try {
     const keys = Object.keys(req.body ?? {});
@@ -33,7 +33,7 @@ app.post("/api/solve", async (req, res) => {
     if (!client || client.resetAt <= now) requests.set(clientIp, { count: 1, resetAt: now + 60_000 });
     else client.count++;
     const numbers = validateNumbers(req.body?.numbers);
-    const result = await solveWithCopilot(numbers);
+    const result = await solveTwentyFour(numbers);
     res.json({ ...result, elapsedMs: Math.round(performance.now() - started) });
   } catch (error) {
     const response = toErrorResponse(error);

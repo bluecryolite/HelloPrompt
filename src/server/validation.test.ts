@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateExpression, evaluateStepExpression, findLocalSolution, validateNumbers, validateSolution } from "./validation.js";
+import { evaluateExpression, evaluateStepExpression, findLocalSolution, validateNumbers, validateSolution } from "./features/twenty-four/validation.js";
 
 test("evaluates multiplication before addition", () => {
   assert.equal(evaluateExpression("1 + 2 * 3"), 7);
