@@ -25,7 +25,7 @@ const calcFactorial = defineTool("calcFactorial", {
     },
 });
 
-const session = await createSession(client, null, true, [calcFactorial]);
+const session = await createSession(client, { streaming: true, tools: [calcFactorial] });
 
 session.on("assistant.message_delta", (event) => {
     process.stdout.write(event.data.deltaContent);

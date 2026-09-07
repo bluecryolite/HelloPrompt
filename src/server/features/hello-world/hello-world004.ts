@@ -35,7 +35,11 @@ You should not answer with your own knowledge.
 If the prompt does not contain a number, you should ask the user to provide a number. 
 If the prompt does not mean to calculate the factorial, you should ask the user to clarify.`;
 
-const session = await createSession(client, { mode: "replace", content: systemMessage }, true, [calcFactorial]);
+const session = await createSession(client, {
+    systemMessage: { mode: "replace", content: systemMessage },
+    streaming: true,
+    tools: [calcFactorial]
+});
 
 session.on("assistant.message_delta", (event) => {
     process.stdout.write(event.data.deltaContent);

@@ -1,8 +1,6 @@
 import { CopilotClient, RuntimeConnection, type CopilotSession, type SessionConfig } from "@github/copilot-sdk";
 import { fileURLToPath } from "node:url";
 
-type SessionTools = NonNullable<SessionConfig["tools"]>;
-
 function withCode(message: string, code: string) {
     return Object.assign(new Error(message), { code });
 }
@@ -28,11 +26,9 @@ export function createCopilotClient() {
     });
 }
 
-export function createSession(client: CopilotClient, systemMessage, streaming = false, tools: SessionTools = []): Promise<CopilotSession> {
+export function createSession(client: CopilotClient, config: SessionConfig = {}): Promise<CopilotSession> {
     return client.createSession({
         model: "gpt-5.6-luna",
-        streaming,
-        systemMessage: systemMessage ?? undefined,
-        ...(tools.length > 0 ? { tools } : {})
+        ...config
     });
 }

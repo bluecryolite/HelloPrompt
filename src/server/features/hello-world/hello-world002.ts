@@ -1,7 +1,7 @@
 import { createCopilotClient, createSession } from "./core.js";
 
 const client = createCopilotClient();
-const session = await createSession(client, null, true);
+const session = await createSession(client, { streaming: true });
 
 session.on("assistant.message_delta", (event) => {
     process.stdout.write(event.data.deltaContent);

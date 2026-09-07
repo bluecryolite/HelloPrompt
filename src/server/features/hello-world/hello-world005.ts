@@ -37,15 +37,19 @@ If the prompt does not mean to calculate the factorial, you should ask the user 
 
 const session = await createSession(client,
     {
-        mode: "customize",
-        sections: {
-            tone: { action: "replace", content: "Respond in a warm, professional tone. Be thorough in explanations." },
-            code_change_rules: { action: "remove" },
-            guidelines: { action: "append", content: "\n* Always cite data sources" },
+        reasoningEffort: "low",
+        systemMessage: {
+            mode: "customize",
+            sections: {
+                tone: { action: "replace", content: "Respond in a warm, professional tone. Be thorough in explanations." },
+                code_change_rules: { action: "remove" },
+                guidelines: { action: "append", content: "\n* Always cite data sources" },
+            },
+            content: systemMessage,
         },
-        content: systemMessage,
-    },
-    true, [calcFactorial]);
+        streaming: true,
+        tools: [calcFactorial]
+    });
 
 session.on("assistant.message_delta", (event) => {
     process.stdout.write(event.data.deltaContent);
