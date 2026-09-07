@@ -29,6 +29,7 @@ export function createCopilotClient() {
 export function createSession(client: CopilotClient, config: SessionConfig = {}): Promise<CopilotSession> {
     return client.createSession({
         model: "gpt-5.6-luna",
-        ...config
+        ...config,
+        reasoningEffort: config.reasoningEffort ?? "low",
     });
 }

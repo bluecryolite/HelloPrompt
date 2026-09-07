@@ -37,7 +37,6 @@ If the prompt does not mean to calculate the factorial, you should ask the user 
 
 const session = await createSession(client,
     {
-        reasoningEffort: "low",
         systemMessage: {
             mode: "customize",
             sections: {
