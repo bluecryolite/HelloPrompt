@@ -1,11 +1,14 @@
 import "dotenv/config";
 import express from "express";
 import { createServer } from "node:http";
-import { solveTwentyFour } from "./features/twenty-four/solver.js";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { validateNumbers } from "./features/twenty-four/validation.js";
 
 export const app = express();
 const port = Number(process.env.PORT ?? 30001);
+const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
+const distDirectory = resolve(projectRoot, "dist");
 const requests = new Map<string, { count: number; resetAt: number }>();
 export function toErrorResponse(error: unknown): { status: number; body: { code: string; message: string } } {
   const code = (error as { code?: string }).code;
@@ -33,6 +36,7 @@ app.post("/features/twenty-four", async (req, res) => {
     if (!client || client.resetAt <= now) requests.set(clientIp, { count: 1, resetAt: now + 60_000 });
     else client.count++;
     const numbers = validateNumbers(req.body?.numbers);
+    const { solveTwentyFour } = await import("./features/twenty-four/solver.js");
     const result = await solveTwentyFour(numbers);
     res.json({ ...result, elapsedMs: Math.round(performance.now() - started) });
   } catch (error) {
@@ -49,8 +53,8 @@ app.use((error: unknown, _req: express.Request, res: express.Response, next: exp
 });
 
 if (process.env.NODE_ENV !== "test") {
-  app.use(express.static("dist"));
-  app.get("/{*splat}", (_, res) => res.sendFile("index.html", { root: "dist" }));
+  app.use(express.static(distDirectory));
+  app.get("/{*splat}", (_, res) => res.sendFile("index.html", { root: distDirectory }));
 }
 if (process.env.NODE_ENV !== "test") {
   createServer(app).listen(port, "0.0.0.0", () => console.log(`HelloPrompt listening on ${port}`));

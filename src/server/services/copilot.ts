@@ -74,7 +74,8 @@ export async function requestCopilot(request: CopilotRequest): Promise<CopilotRe
     const session = await copilot.createSession({
       ...(model ? { model } : {}),
       availableTools: [],
-      systemMessage: { mode: "replace", content: request.systemInstruction }
+      systemMessage: { mode: "replace", content: request.systemInstruction },
+      reasoningEffort: "low",
     });
     try {
       let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -87,7 +88,7 @@ export async function requestCopilot(request: CopilotRequest): Promise<CopilotRe
         ]);
         const content = response?.data?.content;
         if (typeof content !== "string") throw withCode("模型没有返回有效内容。", "MODEL_OUTPUT");
-        return { content, model: model ?? "Copilot 默认模型" };
+        return { content, model: response?.data?.model ?? "未知模型" };
       } finally {
         if (timeout) clearTimeout(timeout);
       }
