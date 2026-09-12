@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
+import Shopoint from "./components/Shopoint.vue";
 import TwentyFourGame from "./components/TwentyFourGame.vue";
 
 type Feature = {
@@ -9,12 +10,20 @@ type Feature = {
   path: string;
 };
 
-const features: Feature[] = [{
-  id: "twenty-four",
-  title: "24 点计算器",
-  description: "使用四个数字各一次，通过加减乘除得到 24。",
-  path: "/features/24-game"
-}];
+const features: Feature[] = [
+  {
+    id: "twenty-four",
+    title: "24 点计算器",
+    description: "使用四个数字各一次，通过加减乘除得到 24。",
+    path: "/features/24-game"
+  },
+  {
+    id: "shopoint",
+    title: "Shopoint",
+    description: "输入和处理多行文本。",
+    path: "/features/shopoint"
+  }
+];
 
 const currentPath = ref(window.location.pathname);
 const currentFeature = () => features.find((feature) => feature.path === currentPath.value);
@@ -49,7 +58,8 @@ onUnmounted(() => window.removeEventListener("popstate", handlePopState));
     <nav class="feature-nav" aria-label="页面导航">
       <button class="back-link" @click="navigate('/')">← 返回功能中心</button>
     </nav>
-    <TwentyFourGame />
+    <TwentyFourGame v-if="currentPath === '/features/24-game'" />
+    <Shopoint v-else-if="currentPath === '/features/shopoint'" />
   </main>
   <main v-else class="not-found card">
     <div class="eyebrow">404</div>

@@ -45,7 +45,7 @@ const auditLog: AuditEntry[] = [];
 // In this case, we want to make sure that the assistant does not answer with its own knowledge,
 // but instead uses the calcFactorial tool to calculate the factorial of a number.
 // Add a new rule:
-// if the prompt contains number, but not mean to calculate the factorial, you should specify not call the tools,
+// if the prompt contains number, but not mean to calculate the factorial, it should not call the tools,
 // or the tool may be called with the number.
 const systemMessage = `You are a Factorial Assistant. 
 For every request, you must use the tool of calcFactorial to calculate the factorial of a number. 

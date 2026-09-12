@@ -44,6 +44,19 @@ app.post("/features/twenty-four", async (req, res) => {
     res.status(response.status).json(response.body);
   }
 });
+app.post("/features/shopoint", async (req, res) => {
+  try {
+    const keys = Object.keys(req.body ?? {});
+    if (keys.length !== 1 || keys[0] !== "text" || typeof req.body?.text !== "string") {
+      throw Object.assign(new Error("请求参数无效。"), { code: "INPUT" });
+    }
+    const { solve } = await import("./features/shopoint/service.js");
+    res.json(await solve(req.body.text));
+  } catch (error) {
+    const response = toErrorResponse(error);
+    res.status(response.status).json(response.body);
+  }
+});
 app.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
   if (error instanceof SyntaxError && "body" in error) {
     res.status(400).json({ code: "INVALID_JSON", message: "请求 JSON 格式无效。" });
