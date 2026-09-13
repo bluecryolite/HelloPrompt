@@ -20,7 +20,6 @@ app.set("trust proxy", process.env.TRUST_PROXY === "true");
 app.use(express.json({ limit: "4kb" }));
 app.get("/api/health", (_, res) => res.json({ ok: true }));
 app.post("/features/twenty-four", async (req, res) => {
-  const started = performance.now();
   try {
     const keys = Object.keys(req.body ?? {});
     if (keys.length !== 1 || keys[0] !== "numbers") {
@@ -38,7 +37,7 @@ app.post("/features/twenty-four", async (req, res) => {
     const numbers = validateNumbers(req.body?.numbers);
     const { solveTwentyFour } = await import("./features/twenty-four/solver.js");
     const result = await solveTwentyFour(numbers);
-    res.json({ ...result, elapsedMs: Math.round(performance.now() - started) });
+    res.json(result);
   } catch (error) {
     const response = toErrorResponse(error);
     res.status(response.status).json(response.body);

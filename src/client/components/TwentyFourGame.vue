@@ -66,7 +66,11 @@ onUnmounted(() => clearInterval(timer));
           <small>剩余：{{ step.remaining.join("、") }}</small>
         </div>
       </div>
-      <small class="duration">服务端耗时 {{ (result.elapsedMs / 1000).toFixed(1) }} 秒</small>
+      <small class="duration">模型调用时间：{{ (result.elapsedMs / 1000).toFixed(1) }} 秒</small>
+      <small class="model">输入 token：{{ result.inputTokens }}</small>
+      <small class="model">输出 token：{{ result.outputTokens }}</small>
+      <small class="model">缓存读 token：{{ result.cacheReadTokens }}</small>
+      <small class="model">缓存写 token：{{ result.cacheWriteTokens }}</small>
       <small class="model">模型：{{ result.model }}</small>
     </section>
   </main>

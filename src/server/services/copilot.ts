@@ -11,7 +11,14 @@ let activeRequests = 0;
 const waiters: Array<() => void> = [];
 
 export type CopilotRequest = { systemInstruction: string; prompt: string; model?: string };
-export type CopilotResponse = { content: string; model: string };
+export type CopilotUsage = {
+  elapsedMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+};
+export type CopilotResponse = { content: string; model: string } & CopilotUsage;
 
 function withCode(message: string, code: string) {
   return Object.assign(new Error(message), { code });
@@ -77,6 +84,20 @@ export async function requestCopilot(request: CopilotRequest): Promise<CopilotRe
       systemMessage: { mode: "replace", content: request.systemInstruction },
       reasoningEffort: "low",
     });
+    const usage: CopilotUsage = {
+      elapsedMs: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0
+    };
+    session.on("assistant.usage", (event) => {
+      usage.elapsedMs += event.data.duration ?? 0;
+      usage.inputTokens += event.data.inputTokens ?? 0;
+      usage.outputTokens += event.data.outputTokens ?? 0;
+      usage.cacheReadTokens += event.data.cacheReadTokens ?? 0;
+      usage.cacheWriteTokens += event.data.cacheWriteTokens ?? 0;
+    });
     try {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
@@ -88,7 +109,7 @@ export async function requestCopilot(request: CopilotRequest): Promise<CopilotRe
         ]);
         const content = response?.data?.content;
         if (typeof content !== "string") throw withCode("模型没有返回有效内容。", "MODEL_OUTPUT");
-        return { content, model: response?.data?.model ?? "未知模型" };
+        return { content, model: response?.data?.model ?? "未知模型", ...usage };
       } finally {
         if (timeout) clearTimeout(timeout);
       }
