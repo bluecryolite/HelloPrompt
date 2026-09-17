@@ -8,8 +8,15 @@ export type ShopointResponse = {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  intent: ShopointIntent;
   addressComparison: ShopointAddressComparison;
   codeSearches: ShopointCodeSearch[];
+};
+
+export type ShopointIntent = {
+  type: string;
+  summary: string;
+  raw: string;
 };
 
 export type ShopointAddressComparison = {
@@ -37,7 +44,7 @@ export type ShopointCodeLocation = {
 function isShopointResponse(value: unknown): value is ShopointResponse {
   if (!value || typeof value !== "object") return false;
   const body = value as Record<string, unknown>;
-  return Object.keys(body).sort().join(",") === "addressComparison,cacheReadTokens,cacheWriteTokens,codeSearches,elapsedMs,inputTokens,model,outputTokens,result" &&
+  return Object.keys(body).sort().join(",") === "addressComparison,cacheReadTokens,cacheWriteTokens,codeSearches,elapsedMs,inputTokens,intent,model,outputTokens,result" &&
     typeof body.result === "string" &&
     typeof body.model === "string" &&
     typeof body.elapsedMs === "number" && Number.isFinite(body.elapsedMs) && body.elapsedMs >= 0 &&
@@ -45,8 +52,18 @@ function isShopointResponse(value: unknown): value is ShopointResponse {
     typeof body.outputTokens === "number" && Number.isFinite(body.outputTokens) && body.outputTokens >= 0 &&
     typeof body.cacheReadTokens === "number" && Number.isFinite(body.cacheReadTokens) && body.cacheReadTokens >= 0 &&
     typeof body.cacheWriteTokens === "number" && Number.isFinite(body.cacheWriteTokens) && body.cacheWriteTokens >= 0 &&
+    isIntent(body.intent) &&
     isAddressComparison(body.addressComparison) &&
     isCodeSearches(body.codeSearches);
+}
+
+function isIntent(value: unknown): value is ShopointIntent {
+  if (!value || typeof value !== "object") return false;
+  const intent = value as Record<string, unknown>;
+  return Object.keys(intent).sort().join(",") === "raw,summary,type" &&
+    typeof intent.type === "string" && intent.type.length > 0 &&
+    typeof intent.summary === "string" && intent.summary.length > 0 &&
+    typeof intent.raw === "string" && intent.raw.length > 0;
 }
 
 function isAddressComparison(value: unknown): value is ShopointAddressComparison {

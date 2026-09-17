@@ -53,6 +53,7 @@ onUnmounted(() => clearInterval(timer));
     <section v-if="result" class="shopoint-result">
       <h2>结果</h2>
       <p>{{ result.result }}</p>
+      <small class="model">问题类型：{{ result.intent.type }}</small>
       <small class="model">模型：{{ result.model }}</small>
       <small class="model">模型调用时间：{{ (result.elapsedMs / 1000).toFixed(1) }} 秒</small>
       <small class="model">输入 token：{{ result.inputTokens }}</small>
