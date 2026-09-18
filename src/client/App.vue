@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
+import HelloSpeech from "./components/HelloSpeech.vue";
 import Shopoint from "./components/Shopoint.vue";
 import TwentyFourGame from "./components/TwentyFourGame.vue";
 
@@ -22,6 +23,12 @@ const features: Feature[] = [
     title: "Shopoint",
     description: "输入和处理多行文本。",
     path: "/features/shopoint"
+  },
+  {
+    id: "hello-speech",
+    title: "Hello Speech",
+    description: "与 Copilot 进行文本对话。",
+    path: "/features/hello-speech"
   }
 ];
 
@@ -60,6 +67,7 @@ onUnmounted(() => window.removeEventListener("popstate", handlePopState));
     </nav>
     <TwentyFourGame v-if="currentPath === '/features/24-game'" />
     <Shopoint v-else-if="currentPath === '/features/shopoint'" />
+    <HelloSpeech v-else-if="currentPath === '/features/hello-speech'" />
   </main>
   <main v-else class="not-found card">
     <div class="eyebrow">404</div>

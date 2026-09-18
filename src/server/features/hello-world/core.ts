@@ -1,4 +1,4 @@
-import { CopilotClient, RuntimeConnection, type CopilotSession, type SessionConfig } from "@github/copilot-sdk";
+import { CopilotClient, RuntimeConnection, type CopilotClientMode, type SessionConfig } from "@github/copilot-sdk";
 import { fileURLToPath } from "node:url";
 import {resolve} from "node:path";
 import {mkdir} from "node:fs/promises";
@@ -21,7 +21,7 @@ function resolveCopilotCliPath() {
     throw withCode(`未找到适用于 ${process.platform}/${process.arch} 的 Copilot CLI。`, "UPSTREAM");
 }
 
-export function createCopilotClient(mode: string = "copilot-cli"): CopilotClient {
+export function createCopilotClient(mode: CopilotClientMode = "copilot-cli"): CopilotClient {
     if (mode === "empty") {
         mkdir(copilotDataDirectory, { recursive: true });
     }
@@ -35,7 +35,10 @@ export function createCopilotClient(mode: string = "copilot-cli"): CopilotClient
     });
 }
 
-export function createSession(client: CopilotClient, config: SessionConfig = {}): Promise<CopilotSession> {
+export function createSession<T>(
+    client: {createSession(config: SessionConfig): Promise<T>},
+    config: SessionConfig = {},
+): Promise<T> {
     return client.createSession({
         model: "gpt-5.6-luna",
         ...config,
