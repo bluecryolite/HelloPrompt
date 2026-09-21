@@ -18,6 +18,7 @@
     "express": "^5.2.1",
     "langchain": "^1.5.11",
     "node-notifier": "^10.0.1",
+    "onnxruntime-web": "^1.30.0",
     "vue": "^3.5.25"
   },
   "devDependencies": {
