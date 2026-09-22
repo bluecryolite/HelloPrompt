@@ -9,16 +9,19 @@
     "start:prod": "npm start",
     "dev": "npm start",
     "build": "vite build",
-    "test": "NODE_ENV=test tsx --test src/**/*.test.ts"
+    "test": "NODE_ENV=test tsx --test src/**/*.test.ts src/client/services/*.test.ts"
   },
   "dependencies": {
     "@github/copilot-sdk": "^1.0.11",
+    "@huggingface/transformers": "^3.8.1",
     "@langchain/core": "^1.2.12",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "kokoro-js": "^1.2.1",
     "langchain": "^1.5.11",
     "node-notifier": "^10.0.1",
     "onnxruntime-web": "^1.30.0",
+    "phonemizer": "^1.2.1",
     "vue": "^3.5.25"
   },
   "devDependencies": {

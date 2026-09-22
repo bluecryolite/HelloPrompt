@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from "vue";
 import { ApiError } from "../services/http.js";
-import { MeloTtsService, selectSpeechText, type TtsSnapshot } from "../services/melo-tts.js";
+import { KokoroTtsService, selectSpeechText, type TtsSnapshot } from "../services/kokoro-tts.js";
 import { sendHelloSpeech, startHelloSpeech, type HelloSpeechResponse } from "../features/hello-speech.js";
 
 type Message = {
@@ -12,6 +12,10 @@ type Message = {
   showMetadata?: boolean;
 };
 
+function browserSupportsWebGpu(): boolean {
+  return typeof navigator !== "undefined" && "gpu" in navigator;
+}
+
 const input = ref("");
 const messages = ref<Message[]>([]);
 const sessionId = ref<string>();
@@ -19,7 +23,7 @@ const loading = ref(false);
 const startingNewChat = ref(false);
 const chatReady = ref(false);
 const status = ref<HelloSpeechResponse["status"]>("in_progress");
-const tts = new MeloTtsService();
+const tts = new KokoroTtsService({ device: browserSupportsWebGpu() ? "webgpu" : "wasm" });
 const ttsState = ref<TtsSnapshot["state"]>(tts.state.state);
 const ttsError = ref<string>();
 const activeMessageId = ref<number>();
@@ -158,7 +162,7 @@ async function submit() {
   <main class="card hello-speech">
     <div class="eyebrow">HELLO SPEECH</div>
     <h1>Hello Speech</h1>
-    <p class="intro">输入文字与 Copilot 对话。回复会在浏览器中使用 MeloTTS 朗读。</p>
+    <p class="intro">输入文字与 Copilot 对话。回复会在浏览器中使用 Kokoro 朗读。</p>
     <button class="secondary new-chat" type="button" :disabled="loading" @click="newChat">
       {{ startingNewChat ? "新聊天准备中…" : "新聊天" }}
     </button>
@@ -197,7 +201,7 @@ async function submit() {
       </article>
     </section>
     <div v-if="ttsState === 'loading'" class="tts-loading" role="status" aria-live="polite">
-      <span class="spinner"></span>{{ activeMessageId === undefined ? "正在加载 MeloTTS…" : "正在准备语音…" }}
+      <span class="spinner"></span>{{ activeMessageId === undefined ? "正在加载 Kokoro…" : "正在准备语音…" }}
     </div>
     <div v-if="ttsState === 'error'" class="tts-error" role="alert">
       {{ ttsError ?? "语音播放失败。" }}

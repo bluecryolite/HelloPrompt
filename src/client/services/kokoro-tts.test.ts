@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MeloTtsService, selectSpeechText, type AudioPlayer, type AudioSamples, type MeloTtsRuntime } from "./melo-tts.js";
+import { KokoroTtsService, selectSpeechText, type AudioPlayer, type AudioSamples, type KokoroTtsRuntime } from "./kokoro-tts.js";
 
-class FakeRuntime implements MeloTtsRuntime {
+class FakeRuntime implements KokoroTtsRuntime {
   loadCalls = 0;
   synthesizeCalls: string[] = [];
   resolveLoad?: () => void;
@@ -25,7 +25,7 @@ class FakeRuntime implements MeloTtsRuntime {
   synthesize(text: string): Promise<AudioSamples> {
     assert.equal(this.loaded, true);
     this.synthesizeCalls.push(text);
-    return Promise.resolve({ samples: new Float32Array([0, 0.1]), sampleRate: 44100 });
+    return Promise.resolve({ samples: new Float32Array([0, 0.1]), sampleRate: 24_000 });
   }
 
   dispose(): void {}
@@ -34,7 +34,6 @@ class FakeRuntime implements MeloTtsRuntime {
 class FakePlayer implements AudioPlayer {
   playCalls: AudioSamples[] = [];
   stopCalls = 0;
-  resolvePlayback?: () => void;
 
   constructor(private readonly autoFinish = false) {}
 
@@ -55,6 +54,8 @@ class FakePlayer implements AudioPlayer {
   }
 
   dispose(): void {}
+
+  private resolvePlayback?: () => void;
 }
 
 test("speech selection uses only message text", () => {
@@ -67,7 +68,7 @@ test("speech selection uses only message text", () => {
 test("loading is shared and the latest speech replaces an older request", async () => {
   const runtime = new FakeRuntime();
   const player = new FakePlayer(true);
-  const service = new MeloTtsService({ runtimeFactory: () => runtime, player });
+  const service = new KokoroTtsService({ runtimeFactory: () => runtime, player });
   const states: string[] = [];
   service.subscribe(({ state }) => states.push(state));
 
@@ -85,7 +86,7 @@ test("loading is shared and the latest speech replaces an older request", async 
 test("stop cancels playback without leaving a speaking state", async () => {
   const runtime = new FakeRuntime();
   const player = new FakePlayer();
-  const service = new MeloTtsService({ runtimeFactory: () => runtime, player });
+  const service = new KokoroTtsService({ runtimeFactory: () => runtime, player });
   const speaking = service.speak("可取消的回复");
   await new Promise<void>((resolve) => queueMicrotask(resolve));
   service.stop();
