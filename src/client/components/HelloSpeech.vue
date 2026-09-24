@@ -2,6 +2,10 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { ApiError } from "../services/http.js";
 import { KokoroTtsService, selectSpeechText, type TtsSnapshot } from "../services/kokoro-tts.js";
+import {
+  WhisperSttService,
+  type SttSnapshot,
+} from "../services/whisper-stt.js";
 import { sendHelloSpeech, startHelloSpeech, type HelloSpeechResponse } from "../features/hello-speech.js";
 
 type Message = {
@@ -16,7 +20,6 @@ function browserSupportsWebGpu(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
 }
 
-const input = ref("");
 const messages = ref<Message[]>([]);
 const sessionId = ref<string>();
 const loading = ref(false);
@@ -27,7 +30,15 @@ const tts = new KokoroTtsService({ device: browserSupportsWebGpu() ? "webgpu" : 
 const ttsState = ref<TtsSnapshot["state"]>(tts.state.state);
 const ttsError = ref<string>();
 const activeMessageId = ref<number>();
+const stt = new WhisperSttService({ device: browserSupportsWebGpu() ? "webgpu" : "wasm" });
+const sttState = ref<SttSnapshot["state"]>(stt.state.state);
+const sttError = ref<string>();
+const sttDevice = ref<SttSnapshot["device"]>(stt.state.device);
+const sttElapsedMs = ref(0);
+const sttMaxRecordingMs = ref(stt.state.maxRecordingMs);
 let nextMessageId = 0;
+let recordingIntent = 0;
+let holdActive = false;
 
 function addMessage(role: Message["role"], text: string, response?: HelloSpeechResponse): Message {
   const message = { id: nextMessageId++, role, text, response, showMetadata: false };
@@ -48,6 +59,7 @@ function refreshForWrongRequest(message: string) {
 async function newChat() {
   if (loading.value) return;
 
+  stt.cancel();
   tts.prime();
   tts.stop();
   activeMessageId.value = undefined;
@@ -112,23 +124,44 @@ function updateTtsSnapshot(snapshot: TtsSnapshot) {
   ttsError.value = snapshot.error?.message;
 }
 
-const unsubscribeFromTts = tts.subscribe(updateTtsSnapshot);
+function updateSttSnapshot(snapshot: SttSnapshot) {
+  sttState.value = snapshot.state;
+  sttError.value = snapshot.error?.message;
+  sttDevice.value = snapshot.device;
+  sttElapsedMs.value = snapshot.elapsedMs;
+  sttMaxRecordingMs.value = snapshot.maxRecordingMs;
+}
 
-onMounted(() => {
-  void tts.load().catch(() => undefined);
-});
+function retryStt() {
+  sttError.value = undefined;
+  void stt.load().catch(() => undefined);
+}
 
-onUnmounted(() => {
-  unsubscribeFromTts();
-  tts.dispose();
-});
+function canRecord(): boolean {
+  return chatReady.value &&
+    !loading.value &&
+    status.value !== "completed" &&
+    (sttState.value === "ready" || sttState.value === "recording" || sttState.value === "error");
+}
 
-async function submit() {
-  const value = input.value;
-  if (!value.trim() || loading.value) {
-    if (!value.trim()) showError("请输入要发送的内容。");
-    return;
+function recordingTimeLabel(): string {
+  const elapsed = Math.min(sttElapsedMs.value, sttMaxRecordingMs.value);
+  return `${(elapsed / 1000).toFixed(1)} / ${(sttMaxRecordingMs.value / 1000).toFixed(0)} 秒`;
+}
+
+function sttStatusLabel(): string {
+  if (sttState.value === "loading") {
+    return `正在加载 Whisper 模型（${sttDevice.value === "webgpu" ? "WebGPU" : "WASM"}）…`;
   }
+  if (sttState.value === "recording") return `录音中 ${recordingTimeLabel()}，松开麦克风即可转文字`;
+  if (sttState.value === "transcribing") return "正在使用 Whisper 转换语音…";
+  if (sttState.value === "error") return sttError.value ?? "语音输入暂时不可用。";
+  return `Whisper 已准备（${sttDevice.value === "webgpu" ? "WebGPU" : "WASM"}）`;
+}
+
+async function submitTranscript(value: string) {
+  if (!value.trim()) return;
+  if (loading.value) return;
   if (!chatReady.value || !sessionId.value) {
     showError("请先点击“新聊天”按钮。");
     return;
@@ -136,7 +169,6 @@ async function submit() {
 
   tts.prime();
   addMessage("user", value);
-  input.value = "";
   loading.value = true;
   try {
     const response = await sendHelloSpeech(value, sessionId.value);
@@ -156,13 +188,77 @@ async function submit() {
     loading.value = false;
   }
 }
+
+async function beginHold(event?: PointerEvent) {
+  if (holdActive) return;
+  if (!canRecord()) {
+    if (!chatReady.value) showError("请先点击“新聊天”按钮。");
+    return;
+  }
+  if (event?.currentTarget instanceof HTMLElement) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+  holdActive = true;
+  const intent = ++recordingIntent;
+  try {
+    await stt.startRecording();
+    if (intent !== recordingIntent || !holdActive) stt.cancel();
+  } catch (exception) {
+    holdActive = false;
+    sttError.value = exception instanceof Error ? exception.message : "无法开始录音。";
+  }
+}
+
+function endHold() {
+  if (!holdActive) return;
+  holdActive = false;
+  recordingIntent += 1;
+  void stt.stopRecording().catch((exception: unknown) => {
+    sttError.value = exception instanceof Error ? exception.message : "语音转文字失败。";
+  });
+}
+
+function handleKeyDown(event: KeyboardEvent) {
+  if ((event.key === " " || event.key === "Enter") && !event.repeat) {
+    event.preventDefault();
+    void beginHold();
+  }
+}
+
+function handleKeyUp(event: KeyboardEvent) {
+  if (event.key === " " || event.key === "Enter") {
+    event.preventDefault();
+    endHold();
+  }
+}
+
+const unsubscribeFromTts = tts.subscribe(updateTtsSnapshot);
+const unsubscribeFromStt = stt.subscribe(updateSttSnapshot);
+const unsubscribeFromTranscript = stt.onTranscript((transcript) => {
+  holdActive = false;
+  void submitTranscript(transcript);
+});
+
+onMounted(() => {
+  void tts.load().catch(() => undefined);
+  void stt.load().catch(() => undefined);
+});
+
+onUnmounted(() => {
+  holdActive = false;
+  stt.dispose();
+  unsubscribeFromTts();
+  unsubscribeFromStt();
+  unsubscribeFromTranscript();
+  tts.dispose();
+});
 </script>
 
 <template>
   <main class="card hello-speech">
     <div class="eyebrow">HELLO SPEECH</div>
     <h1>Hello Speech</h1>
-    <p class="intro">输入文字与 Copilot 对话。回复会在浏览器中使用 Kokoro 朗读。</p>
+    <p class="intro">按住麦克风用英语与 Copilot 对话。松开后，浏览器会使用本地 Whisper 转换语音。</p>
     <button class="secondary new-chat" type="button" :disabled="loading" @click="newChat">
       {{ startingNewChat ? "新聊天准备中…" : "新聊天" }}
     </button>
@@ -207,21 +303,36 @@ async function submit() {
       {{ ttsError ?? "语音播放失败。" }}
       <button class="link" type="button" @click="retrySpeech">重试</button>
     </div>
-    <form class="chat-form" @submit.prevent="submit">
-      <label class="sr-only" for="hello-speech-input">输入消息</label>
-      <input
-        id="hello-speech-input"
-        v-model="input"
-        class="chat-input"
-        type="text"
-        placeholder="输入消息"
-        autocomplete="off"
-        :disabled="loading"
+    <div class="stt-panel">
+      <div class="stt-status" role="status" aria-live="polite">
+        <span v-if="sttState === 'loading' || sttState === 'transcribing'" class="spinner"></span>
+        {{ sttStatusLabel() }}
+      </div>
+      <button
+        class="microphone-button"
+        :class="{ recording: sttState === 'recording' }"
+        type="button"
+        :disabled="!canRecord()"
+        :aria-label="sttState === 'recording' ? '松开麦克风并转换语音' : '按住麦克风开始录音'"
+        :aria-pressed="sttState === 'recording'"
+        @pointerdown="void beginHold($event)"
+        @pointerup="endHold"
+        @pointercancel="endHold"
+        @lostpointercapture="endHold"
+        @keydown="handleKeyDown"
+        @keyup="handleKeyUp"
       >
-      <button class="primary chat-submit" type="submit" :disabled="loading || !chatReady || status === 'completed'">
-        {{ loading ? "发送中…" : "发送" }}
+        <span class="microphone-icon" aria-hidden="true">🎙️</span>
+        <span>{{ sttState === "recording" ? "录音中" : "按住说话" }}</span>
       </button>
-    </form>
+      <div v-if="sttState === 'recording'" class="recording-progress" aria-hidden="true">
+        <span :style="{ width: `${Math.min(100, (sttElapsedMs / sttMaxRecordingMs) * 100)}%` }"></span>
+      </div>
+      <div v-if="sttState === 'error'" class="stt-error" role="alert">
+        {{ sttError ?? "语音输入失败。" }}
+        <button class="link" type="button" @click="retryStt">重试</button>
+      </div>
+    </div>
     <div v-if="loading" class="loading" aria-live="polite"><span class="spinner"></span>正在等待回复…</div>
   </main>
 </template>
@@ -231,9 +342,6 @@ async function submit() {
 .secondary{width:auto;border:1px solid #5279e6;border-radius:11px;padding:12px 18px;background:#fff;color:#5279e6;font:inherit;font-weight:700;cursor:pointer}
 .secondary:disabled{opacity:.6;cursor:wait}
 .new-chat{margin-bottom:14px}
-.chat-form{display:grid;grid-template-columns:1fr auto;gap:10px}
-.chat-input{width:100%;border:1px solid #dbe1ec;border-radius:10px;padding:13px;color:#202640;font:inherit}
-.chat-submit{width:auto;padding-inline:24px}
 .chat-messages{display:grid;gap:14px;margin-top:24px}
 .message-row{display:flex}
 .message-user{justify-content:flex-end}
@@ -254,7 +362,16 @@ async function submit() {
 .metadata dt{font-weight:700}
 .metadata dd{margin:0;text-align:right;overflow-wrap:anywhere}
 .tts-loading{color:#65708b;text-align:center;margin:20px 0 0}
-.tts-error{display:flex;align-items:center;gap:8px;margin-top:16px;padding:10px 12px;border:1px solid #f0caca;border-radius:10px;background:#fff0f0;color:#c34343;font-size:13px}
+.tts-error,.stt-error{display:flex;align-items:center;gap:8px;margin-top:16px;padding:10px 12px;border:1px solid #f0caca;border-radius:10px;background:#fff0f0;color:#c34343;font-size:13px}
+.stt-panel{display:grid;gap:12px;margin-top:24px;padding-top:20px;border-top:1px solid #edf0f5;text-align:center}
+.stt-status{min-height:20px;color:#65708b;font-size:13px}
+.microphone-button{justify-self:center;display:inline-flex;align-items:center;gap:10px;border:0;border-radius:999px;padding:15px 24px;background:#5279e6;color:#fff;cursor:pointer;font:inherit;font-weight:700;touch-action:none;user-select:none}
+.microphone-button:hover:not(:disabled){background:#4167d1}
+.microphone-button:disabled{opacity:.55;cursor:not-allowed}
+.microphone-button.recording{background:#c34343;box-shadow:0 0 0 5px #f3caca;transform:scale(1.03)}
+.microphone-icon{font-size:23px;line-height:1}
+.recording-progress{height:5px;overflow:hidden;border-radius:999px;background:#e4e9f2}
+.recording-progress span{display:block;height:100%;border-radius:inherit;background:#c34343;transition:width .1s linear}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-@media(max-width:480px){.chat-form{grid-template-columns:1fr}.chat-submit{width:100%}.message-bubble{max-width:92%}}
+@media(max-width:480px){.message-bubble{max-width:92%}.microphone-button{width:100%;justify-content:center}}
 </style>

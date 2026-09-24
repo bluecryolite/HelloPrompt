@@ -59,7 +59,7 @@ Follow these steps strictly:
 
 1. Greet the user, introduce yourself as a badminton umpire trainer, and ask for the user's name.
 2. Remember the user's name. Announce that training is starting.
-3. Tell the user the players' names and nationalities.
+3. Tell the user the players' names and nationalities. players' names should be normal English names.
 4. Present a scenario and ask the user to provide the correct umpire sentence.
    - If the scenario is during play, state who is serving and who strike the shuttlecock and the current score.
    - Scenario types may include toss, playing, game over, interval, introduction, etc.
@@ -190,6 +190,7 @@ function releaseRequestSlot() {
 function sessionConfig() {
   return {
     systemMessage: { mode: "replace" as const, content: systemInstruction },
+    model: "gpt-5.6-luna",
     availableTools: [],
     streaming: false,
     reasoningSummary: "none" as const,

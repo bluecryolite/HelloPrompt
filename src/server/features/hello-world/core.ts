@@ -40,7 +40,7 @@ export function createSession<T>(
     config: SessionConfig = {},
 ): Promise<T> {
     return client.createSession({
-        model: "gpt-5.6-luna",
+        model: "gpt-6-luna",
         ...config,
         reasoningEffort: config.reasoningEffort ?? "low",
     });

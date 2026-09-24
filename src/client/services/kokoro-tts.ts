@@ -1,6 +1,7 @@
 import type { KokoroTTS } from "kokoro-js";
 import type { Tensor } from "@huggingface/transformers";
 import type * as Transformers from "@huggingface/transformers";
+import { withTransformersLocalModelPath } from "./transformers-model-loader.js";
 
 export type TtsState = "idle" | "loading" | "ready" | "speaking" | "error";
 
@@ -97,22 +98,24 @@ class BrowserKokoroTtsRuntime implements KokoroTtsRuntime {
       import("@huggingface/transformers"),
       import("phonemizer"),
     ]);
-    transformers.env.allowLocalModels = true;
-    transformers.env.allowRemoteModels = false;
-    transformers.env.localModelPath = this.assetBaseUrl;
-    const [model, tokenizer, voice] = await Promise.all([
-      transformers.StyleTextToSpeech2Model.from_pretrained(this.modelId, {
-        dtype: this.dtype,
-        device: this.device,
-        subfolder: "",
+    const [loaded, voice] = await Promise.all([
+      withTransformersLocalModelPath(transformers.env, this.assetBaseUrl, async () => {
+        const [model, tokenizer] = await Promise.all([
+          transformers.StyleTextToSpeech2Model.from_pretrained(this.modelId, {
+            dtype: this.dtype,
+            device: this.device,
+            subfolder: "",
+          }),
+          transformers.AutoTokenizer.from_pretrained(this.modelId),
+        ]);
+        return { model, tokenizer, Tensor: transformers.Tensor };
       }),
-      transformers.AutoTokenizer.from_pretrained(this.modelId),
       fetchVoice(this.voiceAssetUrl),
     ]);
-    this.model = new kokoro.KokoroTTS(model as KokoroTTS["model"], tokenizer);
+    this.model = new kokoro.KokoroTTS(loaded.model as KokoroTTS["model"], loaded.tokenizer);
     this.voice = voice;
     this.phonemize = phonemizer.phonemize;
-    this.Tensor = transformers.Tensor;
+    this.Tensor = loaded.Tensor;
   }
 
   async synthesize(text: string): Promise<AudioSamples> {
