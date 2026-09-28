@@ -190,7 +190,7 @@ function releaseRequestSlot() {
 function sessionConfig() {
   return {
     systemMessage: { mode: "replace" as const, content: systemInstruction },
-    model: "gpt-5.6-luna",
+    model: "gpt-6-luna",
     availableTools: [],
     streaming: false,
     reasoningSummary: "none" as const,

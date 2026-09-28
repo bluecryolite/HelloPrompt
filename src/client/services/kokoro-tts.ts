@@ -46,6 +46,23 @@ const env = (import.meta as ImportMeta & { env?: Record<string, string | undefin
 const DEFAULT_ASSET_BASE_URL = env.VITE_KOKORO_ASSET_BASE_URL ?? "/models/kokoro/";
 const DEFAULT_MODEL_ID = env.VITE_KOKORO_MODEL_ID ?? "Kokoro-82M";
 const DEFAULT_VOICE = "af_heart";
+const MAX_SPEECH_CHUNK_LENGTH = 180;
+const MAX_KOKORO_SEQUENCE_LENGTH = 511;
+const PAUSE_BETWEEN_CHUNKS_MS = 180;
+const PAUSE_PUNCTUATION = new Set([",", ":", ";", "—", "–", "-"]);
+const PAUSE_DELIMITERS = new Set([...PAUSE_PUNCTUATION, '"']);
+
+class KokoroInputTooLongError extends Error {}
+
+type SpeechPlan = {
+  chunks: string[];
+  leadingPause: boolean;
+  trailingPause: boolean;
+};
+
+function isNumericSeparator(text: string, index: number): boolean {
+  return /\d/u.test(text[index - 1] ?? "") && /\d/u.test(text[index + 1] ?? "");
+}
 
 function parseDtype(value: string | undefined): KokoroDtype {
   switch (value) {
@@ -64,6 +81,105 @@ const DEFAULT_DTYPE = parseDtype(env.VITE_KOKORO_DTYPE);
 
 export function selectSpeechText<T extends { text: string }>(message: T): string {
   return message.text;
+}
+
+function splitLongSpeechUnit(text: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index++) {
+    if (!PAUSE_DELIMITERS.has(text[index]!)) continue;
+    let end = index;
+    while (end + 1 < text.length && PAUSE_DELIMITERS.has(text[end + 1]!)) end++;
+    let shouldPause = false;
+    for (let delimiterIndex = index; delimiterIndex <= end; delimiterIndex++) {
+      if (!isNumericSeparator(text, delimiterIndex)) {
+        shouldPause = true;
+        break;
+      }
+    }
+    if (!shouldPause) {
+      index = end;
+      continue;
+    }
+    appendLengthLimitedChunks(text.slice(start, end + 1).replaceAll('"', ""), maxLength, chunks);
+    start = end + 1;
+    index = end;
+  }
+  appendLengthLimitedChunks(text.slice(start).replaceAll('"', ""), maxLength, chunks);
+  return chunks;
+}
+
+function appendLengthLimitedChunks(text: string, maxLength: number, chunks: string[]): void {
+  const words = text.trim().split(/\s+/u).filter(Boolean);
+  let current = "";
+  for (const word of words) {
+    if (word.length > maxLength) {
+      if (current) chunks.push(current);
+      current = "";
+      const characters = Array.from(word);
+      for (let offset = 0; offset < characters.length; offset += maxLength) {
+        chunks.push(characters.slice(offset, offset + maxLength).join(""));
+      }
+      continue;
+    }
+    const candidate = current ? `${current} ${word}` : word;
+    if (candidate.length > maxLength) {
+      chunks.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+}
+
+function prepareSpeechText(text: string, maxLength = MAX_SPEECH_CHUNK_LENGTH): SpeechPlan {
+  if (!Number.isInteger(maxLength) || maxLength < 1) {
+    throw new RangeError("语音分段长度必须是正整数。");
+  }
+  const normalizedText = text.replaceAll("*", "");
+  const trimmedText = normalizedText.trim();
+  if (!trimmedText) return { chunks: [], leadingPause: false, trailingPause: false };
+  const isPauseDelimiter = (character: string | undefined) =>
+    character !== undefined && PAUSE_DELIMITERS.has(character);
+  return {
+    chunks: normalizedText
+      .split(/(?<=[.!?])\s+|(?<!\d)\n+(?!\d)/u)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean)
+      .flatMap((sentence) => splitLongSpeechUnit(sentence, maxLength)),
+    leadingPause: isPauseDelimiter(trimmedText[0]),
+    trailingPause: isPauseDelimiter(trimmedText.at(-1)),
+  };
+}
+
+export function splitSpeechText(text: string, maxLength = MAX_SPEECH_CHUNK_LENGTH): string[] {
+  return prepareSpeechText(text, maxLength).chunks;
+}
+
+function combineAudioChunks(
+  chunks: AudioSamples[],
+  leadingPause = false,
+  trailingPause = false,
+): AudioSamples {
+  const first = chunks[0];
+  if (!first) throw new Error("没有可播放的语音片段。");
+  if (chunks.some((chunk) => chunk.sampleRate !== first.sampleRate)) {
+    throw new Error("Kokoro 返回了采样率不一致的音频片段。");
+  }
+  if (chunks.length === 1 && !leadingPause && !trailingPause) return first;
+
+  const pauseLength = Math.round(first.sampleRate * PAUSE_BETWEEN_CHUNKS_MS / 1000);
+  const totalLength = chunks.reduce((length, chunk) => length + chunk.samples.length, 0) +
+    pauseLength * (chunks.length - 1 + Number(leadingPause) + Number(trailingPause));
+  const samples = new Float32Array(totalLength);
+  let offset = leadingPause ? pauseLength : 0;
+  for (const [index, chunk] of chunks.entries()) {
+    samples.set(chunk.samples, offset);
+    offset += chunk.samples.length;
+    if (index < chunks.length - 1 || trailingPause) offset += pauseLength;
+  }
+  return { samples, sampleRate: first.sampleRate };
 }
 
 function joinAssetUrl(baseUrl: string, path: string): string {
@@ -124,9 +240,12 @@ class BrowserKokoroTtsRuntime implements KokoroTtsRuntime {
     }
     const phonemes = (await this.phonemize(text, "en-us")).join(" ").trim();
     if (!phonemes) throw new Error("这条回复没有可朗读的英文内容。");
-    const { input_ids } = this.model.tokenizer(phonemes, { truncation: true });
+    const { input_ids } = this.model.tokenizer(phonemes);
     if (Array.isArray(input_ids)) throw new Error("Kokoro 无法生成有效的输入 token。");
     const sequenceLength = input_ids.dims.at(-1) ?? 0;
+    if (sequenceLength > MAX_KOKORO_SEQUENCE_LENGTH) {
+      throw new KokoroInputTooLongError("Kokoro 输入超过单次合成长度，正在重新分段。");
+    }
     const styleOffset = 256 * Math.min(Math.max(sequenceLength - 2, 0), 509);
     const style = this.voice.slice(styleOffset, styleOffset + 256);
     if (style.length !== 256) throw new Error("Kokoro af_heart voice 文件与模型不匹配。");
@@ -274,13 +393,37 @@ export class KokoroTtsService {
   async speak(text: string): Promise<void> {
     const speechText = selectSpeechText({ text });
     if (!speechText.trim()) return;
+    const speechPlan = prepareSpeechText(speechText);
+    if (!speechPlan.chunks.length) return;
     const version = ++this.requestVersion;
     this.player.stop();
     try {
       await this.load();
       if (version !== this.requestVersion) return;
       this.setSnapshot({ state: "loading" });
-      const audio = await this.runtime.synthesize(speechText);
+      const audioChunks: AudioSamples[] = [];
+      const synthesizeChunk = async (chunk: string): Promise<boolean> => {
+        if (version !== this.requestVersion) return false;
+        try {
+          const audio = await this.runtime.synthesize(chunk);
+          if (version !== this.requestVersion) return false;
+          audioChunks.push(audio);
+          return true;
+        } catch (exception: unknown) {
+          if (!(exception instanceof KokoroInputTooLongError) || chunk.length < 2) throw exception;
+          const smallerChunks = splitSpeechText(chunk, Math.max(1, Math.floor(chunk.length / 2)));
+          if (smallerChunks.length < 2) throw exception;
+          for (const smallerChunk of smallerChunks) {
+            if (!await synthesizeChunk(smallerChunk)) return false;
+          }
+          return true;
+        }
+      };
+      for (const chunk of speechPlan.chunks) {
+        if (!await synthesizeChunk(chunk)) return;
+      }
+      if (version !== this.requestVersion) return;
+      const audio = combineAudioChunks(audioChunks, speechPlan.leadingPause, speechPlan.trailingPause);
       if (version !== this.requestVersion) return;
       this.setSnapshot({ state: "speaking" });
       await this.player.play(audio);

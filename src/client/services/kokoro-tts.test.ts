@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { KokoroTtsService, selectSpeechText, type AudioPlayer, type AudioSamples, type KokoroTtsRuntime } from "./kokoro-tts.js";
+import {
+  KokoroTtsService,
+  selectSpeechText,
+  splitSpeechText,
+  type AudioPlayer,
+  type AudioSamples,
+  type KokoroTtsRuntime,
+} from "./kokoro-tts.js";
 
 class FakeRuntime implements KokoroTtsRuntime {
   loadCalls = 0;
@@ -63,6 +70,79 @@ test("speech selection uses only message text", () => {
     text: "这是回复正文",
     response: { model: "secret metadata", elapsedMs: 1000 },
   }), "这是回复正文");
+});
+
+test("speech text is split at sentence boundaries and long clauses", () => {
+  assert.deepEqual(splitSpeechText(
+    "Thanks, Marco. Training is starting.\nThe players are Alex and Ben.",
+  ), ["Thanks,", "Marco.", "Training is starting.", "The players are Alex and Ben."]);
+
+  const longSentence = `Alex is serving, ${"and the score is three ".repeat(12)}the rally continues.`;
+  const chunks = splitSpeechText(longSentence);
+  assert.equal(chunks.every((chunk) => chunk.length <= 180), true);
+  assert.equal(chunks.join(" ").replace(/\s+/gu, " "), longSentence.replace(/\s+/gu, " "));
+});
+
+test("commas, colons, and dashes create short-pause audio boundaries", async () => {
+  const runtime = new FakeRuntime();
+  const player = new FakePlayer(true);
+  const service = new KokoroTtsService({ runtimeFactory: () => runtime, player });
+
+  await service.speak("Hello, there: wait—well-known.");
+
+  assert.deepEqual(runtime.synthesizeCalls, ["Hello,", "there:", "wait—", "well-", "known."]);
+  assert.equal(player.playCalls.length, 1);
+  assert.equal(player.playCalls[0]?.samples.length, 5 * 2 + 4 * 4_320);
+  service.dispose();
+});
+
+test("quotes pause, adjacent pause punctuation coalesces, and asterisks are removed", async () => {
+  const runtime = new FakeRuntime();
+  const player = new FakePlayer(true);
+  const service = new KokoroTtsService({ runtimeFactory: () => runtime, player });
+
+  await service.speak('"Hello,:* world*"');
+  await service.speak("***");
+
+  assert.deepEqual(splitSpeechText("say*it"), ["sayit"]);
+  assert.deepEqual(runtime.synthesizeCalls, ["Hello,:", "world"]);
+  assert.equal(player.playCalls.length, 1);
+  assert.equal(player.playCalls[0]?.samples.length, 2 * 2 + 3 * 4_320);
+  service.dispose();
+});
+
+test("punctuation between digits does not create a pause", async () => {
+  const runtime = new FakeRuntime();
+  const player = new FakePlayer(true);
+  const service = new KokoroTtsService({ runtimeFactory: () => runtime, player });
+
+  await service.speak("Score 5-3, time 12:30, and total 1,000.");
+  await service.speak("5\n3");
+
+  assert.deepEqual(runtime.synthesizeCalls, ["Score 5-3,", "time 12:30,", "and total 1,000.", "5 3"]);
+  assert.deepEqual(player.playCalls.map(({ samples }) => samples.length), [
+    3 * 2 + 2 * 4_320,
+    2,
+  ]);
+  service.dispose();
+});
+
+test("sentence chunks are synthesized separately and played as one continuous buffer", async () => {
+  const runtime = new FakeRuntime();
+  const player = new FakePlayer(true);
+  const service = new KokoroTtsService({ runtimeFactory: () => runtime, player });
+
+  await service.speak("Thanks, Marco. Training is starting. The players are Alex and Ben.");
+
+  assert.deepEqual(runtime.synthesizeCalls, [
+    "Thanks,",
+    "Marco.",
+    "Training is starting.",
+    "The players are Alex and Ben.",
+  ]);
+  assert.equal(player.playCalls.length, 1);
+  assert.equal(player.playCalls[0]?.samples.length, 4 * 2 + 3 * 4_320);
+  service.dispose();
 });
 
 test("loading is shared and the latest speech replaces an older request", async () => {
