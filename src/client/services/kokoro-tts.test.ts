@@ -127,6 +127,21 @@ test("punctuation between digits does not create a pause", async () => {
   service.dispose();
 });
 
+test("punctuation and whitespace between a number and love do not create a pause", async () => {
+  const runtime = new FakeRuntime();
+  const player = new FakePlayer(true);
+  const service = new KokoroTtsService({ runtimeFactory: () => runtime, player });
+
+  await service.speak("3 love");
+  await service.speak("3 : love");
+  await service.speak("3, love");
+  await service.speak("Score, 3 : love.");
+
+  assert.deepEqual(runtime.synthesizeCalls, ["3 love", "3 : love", "3, love", "Score,", "3 : love."]);
+  assert.deepEqual(player.playCalls.map(({ samples }) => samples.length), [2, 2, 2, 2 * 2 + 4_320]);
+  service.dispose();
+});
+
 test("sentence chunks are synthesized separately and played as one continuous buffer", async () => {
   const runtime = new FakeRuntime();
   const player = new FakePlayer(true);

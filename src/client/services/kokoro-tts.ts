@@ -64,6 +64,11 @@ function isNumericSeparator(text: string, index: number): boolean {
   return /\d/u.test(text[index - 1] ?? "") && /\d/u.test(text[index + 1] ?? "");
 }
 
+function isNumberLoveSeparator(text: string, index: number): boolean {
+  return /(?:^|\s)\d+[-\s,:;—–"']*$/u.test(text.slice(0, index)) &&
+    /^[-\s,:;—–"']*love\b/iu.test(text.slice(index + 1));
+}
+
 function parseDtype(value: string | undefined): KokoroDtype {
   switch (value) {
     case "fp32":
@@ -92,7 +97,7 @@ function splitLongSpeechUnit(text: string, maxLength: number): string[] {
     while (end + 1 < text.length && PAUSE_DELIMITERS.has(text[end + 1]!)) end++;
     let shouldPause = false;
     for (let delimiterIndex = index; delimiterIndex <= end; delimiterIndex++) {
-      if (!isNumericSeparator(text, delimiterIndex)) {
+      if (!isNumericSeparator(text, delimiterIndex) && !isNumberLoveSeparator(text, delimiterIndex)) {
         shouldPause = true;
         break;
       }
