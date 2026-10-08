@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { createApp } from "./app.js";
 import type { SessionConfig, SessionMetadata } from "@github/copilot-sdk";
+import { createSession } from "./features/hello-world/core.js";
 import {
   solveHelloSpeech,
   type HelloSpeechClient,
@@ -16,6 +17,7 @@ class FakeSession {
   disconnected = false;
   shouldFail = false;
   responseContent = "bot reply";
+  beforeResponse: (() => Promise<void>) | undefined;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -30,6 +32,7 @@ class FakeSession {
 
   async sendAndWait(_options: { prompt: string }, _timeout?: number) {
     if (this.shouldFail) throw Object.assign(new Error("model failed"), { code: "MODEL" });
+    await this.beforeResponse?.();
     this.usageHandler?.({
       data: {
         duration: 123,
@@ -52,6 +55,7 @@ class FakeClient implements HelloSpeechClient {
   readonly createdSession: FakeSession;
   readonly resumedSession: FakeSession;
   readonly calls: string[] = [];
+  createdConfig: SessionConfig | undefined;
   metadata: SessionMetadata | undefined = {
     sessionId: "existing",
     startTime: new Date(),
@@ -60,6 +64,7 @@ class FakeClient implements HelloSpeechClient {
   };
   started = false;
   stopped = false;
+  onStop: (() => void) | undefined;
 
   constructor() {
     this.createdSession = new FakeSession("generated-session");
@@ -71,8 +76,9 @@ class FakeClient implements HelloSpeechClient {
     this.calls.push("start");
   }
 
-  async createSession(_config: SessionConfig): Promise<HelloSpeechSession> {
+  async createSession(config: SessionConfig): Promise<HelloSpeechSession> {
     this.calls.push("create");
+    this.createdConfig = config;
     return this.createdSession as unknown as HelloSpeechSession;
   }
 
@@ -90,6 +96,7 @@ class FakeClient implements HelloSpeechClient {
   async stop() {
     this.calls.push("stop");
     this.stopped = true;
+    this.onStop?.();
     return [];
   }
 }
@@ -112,6 +119,92 @@ test("creates a session and returns response plus aggregated usage", async () =>
   assert.deepEqual(client.calls, ["create", "stop"]);
   assert.equal(client.createdSession.disconnected, true);
   assert.equal(client.stopped, true);
+});
+
+test("uses COPILOT_MODEL as the default for createSession", async () => {
+  const previousModel = process.env.COPILOT_MODEL;
+  process.env.COPILOT_MODEL = "configured-model";
+  try {
+    let receivedConfig: SessionConfig | undefined;
+    await createSession({
+      async createSession(config) {
+        receivedConfig = config;
+        return config;
+      },
+    }, {});
+    assert.equal(receivedConfig?.model, "configured-model");
+  } finally {
+    if (previousModel === undefined) delete process.env.COPILOT_MODEL;
+    else process.env.COPILOT_MODEL = previousModel;
+  }
+});
+
+test("uses COPILOT_MODEL in the hello speech session config", async () => {
+  const previousModel = process.env.COPILOT_MODEL;
+  process.env.COPILOT_MODEL = "configured-model";
+  try {
+    const client = new FakeClient();
+    await solveHelloSpeech({ input: "hello" }, { createClient: () => client });
+    assert.equal(client.createdConfig?.model, "configured-model");
+  } finally {
+    if (previousModel === undefined) delete process.env.COPILOT_MODEL;
+    else process.env.COPILOT_MODEL = previousModel;
+  }
+});
+
+test("uses HELLO_SPEECH_MAX_QUESTIONS and allows three retries on the final question", async () => {
+  const previousQuestionCount = process.env.HELLO_SPEECH_MAX_QUESTIONS;
+  process.env.HELLO_SPEECH_MAX_QUESTIONS = "6";
+  try {
+    const client = new FakeClient();
+    await solveHelloSpeech({ input: "hello" }, { createClient: () => client });
+    const systemInstruction = JSON.stringify(client.createdConfig?.systemMessage);
+    assert.match(systemInstruction, /at most 6 distinct questions/);
+    assert.match(systemInstruction, /including the final question/);
+    assert.match(systemInstruction, /Allow 3 retries after the initial answer/);
+  } finally {
+    if (previousQuestionCount === undefined) delete process.env.HELLO_SPEECH_MAX_QUESTIONS;
+    else process.env.HELLO_SPEECH_MAX_QUESTIONS = previousQuestionCount;
+  }
+});
+
+test("keeps concurrent HelloSpeech requests within the request limit", async () => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let startedRequests = 0;
+  let signalFourStarted: (() => void) | undefined;
+  const fourStarted = new Promise<void>((resolve) => {
+    signalFourStarted = resolve;
+  });
+  let releaseResponses: (() => void) | undefined;
+  const responseGate = new Promise<void>((resolve) => {
+    releaseResponses = resolve;
+  });
+  const createClient = () => {
+    const client = new FakeClient();
+    client.createdSession.beforeResponse = async () => {
+      inFlight++;
+      startedRequests++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      if (startedRequests === 4) signalFourStarted?.();
+      await responseGate;
+    };
+    client.onStop = () => {
+      inFlight--;
+    };
+    return client;
+  };
+  const requests = Array.from({ length: 8 }, () =>
+    solveHelloSpeech({ input: "hello" }, { createClient }),
+  );
+
+  await fourStarted;
+  const startedAtLimit = startedRequests;
+  releaseResponses?.();
+  await Promise.all(requests);
+  assert.equal(startedAtLimit, 4);
+  assert.equal(startedRequests, 8);
+  assert.equal(maxInFlight, 4);
 });
 
 test("checks and resumes a supplied session before sending", async () => {

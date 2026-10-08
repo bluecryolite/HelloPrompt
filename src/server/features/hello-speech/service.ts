@@ -1,8 +1,20 @@
 import { type AssistantUsageData, type CopilotSession, type ResumeSessionConfig, type SessionConfig, type SessionMetadata } from "@github/copilot-sdk";
+import { config as loadEnv } from "dotenv";
+import { fileURLToPath } from "node:url";
 import { createCopilotClient, createSession } from "../hello-world/core.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_CONCURRENT_REQUESTS = 4;
+const MAX_RETRIES = 3;
+loadEnv({ path: fileURLToPath(new URL("./.env", import.meta.url)), quiet: true });
+
+function getMaxQuestions() {
+  const value = Number(process.env.HELLO_SPEECH_MAX_QUESTIONS ?? "4");
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error("HELLO_SPEECH_MAX_QUESTIONS must be a positive integer.");
+  }
+  return value;
+}
 
 /*
 original version:
@@ -43,7 +55,8 @@ if a question is answered correctly or the times for incorrect answer of last qu
 */
 
 // Optimized by DeepSeek
-const systemInstruction = `
+function createSystemInstruction(maxQuestions: number) {
+  return `
 # Badminton Umpire Trainer Prompt
 
 ## Role
@@ -64,23 +77,24 @@ Follow these steps strictly:
    - If the scenario is during play, state who is serving and who strike the shuttlecock and the current score.
    - Scenario types may include toss, playing, game over, interval, introduction, etc.
 5. Check the user's answer.
-   - If incorrect, correct it and provide an example of correct usage.
-   - Correct the same question at most 3 times. After 3 incorrect attempts, give up on that question.
-6. Repeat steps 4–5 until the user says cancel, exit, or tired, or until at most 4 questions have been asked.
+   - If incorrect, explain the correction, provide an example of correct usage, and let the user try the same question again.
+   - Allow ${MAX_RETRIES} retries after the initial answer (up to ${MAX_RETRIES + 1} total attempts) for every question, including the final question. Do not skip any retry because a question is the last one.
+   - After all ${MAX_RETRIES} retries are incorrect, reveal the correct answer. Continue to the next question if the question limit has not been reached; otherwise, say goodbye and complete the training.
+6. Repeat steps 4–5 until the user says cancel, exit, or tired, or until at most ${maxQuestions} distinct questions have been asked. Retries do not count as additional questions.
 7. Say goodbye and praise the user for their effort and progress.
 
 ## State to Track
 Memorize only:
-- \`userName"
+- user's name
 - players' names and nationalities
 - last question
-- number of incorrect answers for the last question
+- number of retries used for the last question
 - number of questions asked
 - number of questions answered correctly
 - number of questions without a correct answer
 - total number of incorrect answers
 
-If a question is answered correctly, or the last question has 3 incorrect attempts, generate a new question. Discard the previous question and its incorrect-attempt count.
+If a question is answered correctly, or all ${MAX_RETRIES} retries have been used, generate a new question when the question limit has not been reached. Discard the previous question and its retry count. On the final question, use all ${MAX_RETRIES} retries before ending training.
 
 ## Response Format
 End every reply with exactly one status marker on its own line:
@@ -89,6 +103,7 @@ End every reply with exactly one status marker on its own line:
 
 Never explain or discuss the status marker.
 `;
+}
 
 const newChatPrompt = `Initialize this training session with first step:  Say hello to the user and introduce yourself as a trainer for umpire of badminton,
  and ask user's name.`;
@@ -176,21 +191,26 @@ function isUnresumableSessionError(error: unknown): boolean {
 }
 
 async function acquireRequestSlot() {
-  if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
-    await new Promise<void>((resolve) => requestWaiters.push(resolve));
+  if (activeRequests < MAX_CONCURRENT_REQUESTS) {
+    activeRequests++;
+    return;
   }
-  activeRequests++;
+  await new Promise<void>((resolve) => requestWaiters.push(resolve));
 }
 
 function releaseRequestSlot() {
+  const nextWaiter = requestWaiters.shift();
+  if (nextWaiter) {
+    nextWaiter();
+    return;
+  }
   activeRequests--;
-  requestWaiters.shift()?.();
 }
 
 function sessionConfig() {
   return {
-    systemMessage: { mode: "replace" as const, content: systemInstruction },
-    model: "gpt-6-luna",
+    systemMessage: { mode: "replace" as const, content: createSystemInstruction(getMaxQuestions()) },
+    model: process.env.COPILOT_MODEL ?? "gpt-6-luna",
     availableTools: [],
     streaming: false,
     reasoningSummary: "none" as const,
