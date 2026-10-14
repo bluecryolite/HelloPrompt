@@ -22,7 +22,8 @@
     "node-notifier": "^10.0.1",
     "onnxruntime-web": "^1.30.0",
     "phonemizer": "^1.2.1",
-    "vue": "^3.5.25"
+    "vue": "^3.5.25",
+    "wiki-saikou": "^7.6.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.5",
