@@ -16,25 +16,25 @@ const client = createCopilotClient();
 
 try {
     // Sample 1: Directly invoke the model with messages
-    // const copilotModel = new CopilotChatModel(client);
-    // const result1 = await copilotModel.invoke([
-    //    new SystemMessage("你是一个Python专家"),
-    //    new HumanMessage("什么是装饰器？"),
-    // ]);
-    // console.log(result1);
+    const copilotModel = new CopilotChatModel(client);
+    const result1 = await copilotModel.invoke([
+       new SystemMessage("你是一个Python专家"),
+       new HumanMessage("什么是装饰器？"),
+    ]);
+    console.log(result1);
 
     // Sample 2: Use ChatPromptTemplate to format the messages
-    // const copilotModel2 = new CopilotChatModel(client);
-    // const prompt = ChatPromptTemplate.fromMessages([
-    //    ["system", "你是{role}专家，用{language}回答"],
-    //    ["human", "{question}"],
-    // ]);
-    // const result2 = await prompt.pipe(copilotModel2).invoke({
-    //    role: "Python",
-    //    language: "英文",
-    //    question: "什么是装饰器？",
-    // });
-    // console.log(result2);
+    const copilotModel2 = new CopilotChatModel(client);
+    const prompt = ChatPromptTemplate.fromMessages([
+       ["system", "你是{role}专家，用{language}回答"],
+       ["human", "{question}"],
+    ]);
+    const result2 = await prompt.pipe(copilotModel2).invoke({
+       role: "Python",
+       language: "英文",
+       question: "什么是装饰器？",
+    });
+    console.log(result2);
 
     // Sample 3: Use ChatPromptTemplate to format the messages with few shot examples
     const examples = [
