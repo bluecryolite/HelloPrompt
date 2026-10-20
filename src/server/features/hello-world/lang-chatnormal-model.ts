@@ -5,6 +5,7 @@ import {
 } from "@langchain/core/language_models/chat_models";
 import { StructuredTool } from "@langchain/core/tools";
 import { Runnable } from "@langchain/core/runnables";
+import { randomUUID } from "node:crypto";
 
 import { createSession } from "./core.js";
 
@@ -13,9 +14,66 @@ import {
     BaseMessage,
     HumanMessage,
     SystemMessage,
+    ToolMessage,
 } from "@langchain/core/messages";
 import { ChatResult } from "@langchain/core/outputs";
 import { CopilotClient, CopilotSession, type SessionConfig } from "@github/copilot-sdk";
+
+type ToolInvocation = { name: string; args: Record<string, unknown> };
+
+type ToolDecision =
+    | { action: "tools"; calls: ToolInvocation[] }
+    | { action: "tool"; name: string; args: Record<string, unknown> }
+    | { action: "final"; content: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseToolInvocation(value: unknown): ToolInvocation {
+    if (!isRecord(value) || typeof value.name !== "string" || !isRecord(value.args)) {
+        throw new Error("CopilotChatModel returned a tool call with an invalid shape.");
+    }
+    return { name: value.name, args: value.args };
+}
+
+function parseToolDecision(text: string): ToolDecision {
+    const jsonText = text.trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/, "");
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(jsonText);
+    } catch (error) {
+        throw new Error("CopilotChatModel returned an invalid tool decision.", { cause: error });
+    }
+
+    if (typeof parsed !== "object" || parsed === null || !("action" in parsed)) {
+        throw new Error("CopilotChatModel returned a tool decision with an invalid shape.");
+    }
+
+    if (parsed.action === "final" && "content" in parsed && typeof parsed.content === "string") {
+        return { action: "final", content: parsed.content };
+    }
+    if (
+        parsed.action === "tools"
+        && "calls" in parsed
+        && Array.isArray(parsed.calls)
+        && parsed.calls.length > 0
+    ) {
+        return { action: "tools", calls: parsed.calls.map(parseToolInvocation) };
+    }
+    if (
+        parsed.action === "tool"
+        && "name" in parsed
+        && typeof parsed.name === "string"
+        && "args" in parsed
+        && isRecord(parsed.args)
+    ) {
+        return { action: "tool", name: parsed.name, args: parsed.args };
+    }
+    throw new Error("CopilotChatModel returned an unsupported tool decision.");
+}
 
 class CopilotChatModel extends BaseChatModel {
     private client: CopilotClient;
@@ -52,6 +110,108 @@ class CopilotChatModel extends BaseChatModel {
         messages: BaseMessage[],
         options?: this["ParsedCallOptions"],
     ): Promise<ChatResult> {
+        const systemMessage = messages
+            .filter((message): message is SystemMessage => message instanceof SystemMessage)
+            .map((message) => message.text)
+            .filter(Boolean)
+            .join("\n\n");
+
+        const userMessage = [...messages]
+            .reverse()
+            .find((message): message is HumanMessage => message instanceof HumanMessage);
+        if (!userMessage) {
+            throw new Error("CopilotChatModel requires a human message.");
+        }
+
+        const toolMessages = messages.filter(
+            (message): message is ToolMessage => message instanceof ToolMessage,
+        );
+        if (this.boundTools.length > 0 && toolMessages.length > 0) {
+            const finalPrompt = [
+                `User request: ${userMessage.text}`,
+                "Tool results:",
+                ...toolMessages.map((message) => `${message.name}: ${message.text}`),
+                "Answer the user using these tool results. Do not recalculate the result yourself.",
+            ].join("\n");
+            return this.generateText([
+                ...messages.filter((message): message is SystemMessage => message instanceof SystemMessage),
+                new HumanMessage(finalPrompt),
+            ]);
+        }
+
+        const toolInstructions = this.boundTools.length > 0
+            ? [
+                "Choose whether to call one of the available tools or answer without a tool.",
+                "Return only one JSON object, with no markdown or extra text.",
+                'For one or more tool calls, use {"action":"tools","calls":[{"name":"<tool name>","args":{...}}]}.',
+                "For multiple requested numbers, make one tool call for each number. Include both endpoints and every integer in a requested range, in order.",
+                'For example, "from one to four" requires calls with no values 1, 2, 3, and 4.',
+                'For a direct answer, use {"action":"final","content":"<answer>"}.',
+                `Available tools:\n${JSON.stringify(this.boundTools.map((tool) => ({
+                    name: tool.name,
+                    description: tool.description,
+                })), null, 2)}`,
+            ].join("\n")
+            : "";
+        const modelMessages = this.boundTools.length > 0
+            ? [
+                new SystemMessage([systemMessage, toolInstructions].filter(Boolean).join("\n\n")),
+                userMessage,
+            ]
+            : messages;
+        const result = await this.generateText(modelMessages);
+
+        if (this.boundTools.length > 0) {
+            const text = result.generations[0]?.text;
+            if (text === undefined) {
+                throw new Error("CopilotChatModel returned no text for its tool decision.");
+            }
+            const decision = parseToolDecision(text);
+            if (decision.action === "final") {
+                return {
+                    generations: [
+                        {
+                            text: decision.content,
+                            message: new AIMessage(decision.content),
+                        },
+                    ],
+                };
+            }
+
+            const calls = decision.action === "tool"
+                ? [{ name: decision.name, args: decision.args }]
+                : decision.calls;
+            const toolCalls = calls.map(({ name, args }) => {
+                const selectedTool = this.boundTools.find((tool) => tool.name === name);
+                if (!selectedTool) {
+                    throw new Error(`CopilotChatModel selected an unavailable tool: ${name}`);
+                }
+                return {
+                    name,
+                    args,
+                    id: randomUUID(),
+                    type: "tool_call" as const,
+                };
+            });
+
+            const message = new AIMessage({
+                content: "",
+                tool_calls: toolCalls,
+            });
+            return {
+                generations: [
+                    {
+                        text: "",
+                        message,
+                    },
+                ],
+            };
+        }
+
+        return result;
+    }
+
+    private async generateText(messages: BaseMessage[]): Promise<ChatResult> {
         const systemMessage = messages
             .filter((message): message is SystemMessage => message instanceof SystemMessage)
             .map((message) => message.text)
