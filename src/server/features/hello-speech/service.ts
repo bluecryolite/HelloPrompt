@@ -3,8 +3,8 @@ import { config as loadEnv } from "dotenv";
 import { fileURLToPath } from "node:url";
 import { createCopilotClient, createSession } from "../hello-world/core.js";
 
-const REQUEST_TIMEOUT_MS = 30_000;
-const MAX_CONCURRENT_REQUESTS = 4;
+export const REQUEST_TIMEOUT_MS = 30_000;
+export const MAX_CONCURRENT_REQUESTS = 4;
 const MAX_RETRIES = 3;
 loadEnv({ path: fileURLToPath(new URL("./.env", import.meta.url)), quiet: true });
 
@@ -105,7 +105,7 @@ Never explain or discuss the status marker.
 `;
 }
 
-const newChatPrompt = `Initialize this training session with first step:  Say hello to the user and introduce yourself as a trainer for umpire of badminton,
+export const newChatPrompt = `Initialize this training session with first step:  Say hello to the user and introduce yourself as a trainer for umpire of badminton,
  and ask user's name.`;
 const statusMarker = /\s*\[\[CONVERSATION_(IN_PROGRESS|COMPLETED)\]\]\s*$/;
 
@@ -148,11 +148,11 @@ export type HelloSpeechDependencies = {
   createClient?: () => HelloSpeechClient;
 };
 
-function withCode(message: string, code: string) {
+export function withCode(message: string, code: string) {
   return Object.assign(new Error(message), { code });
 }
 
-function invalidSession() {
+export function invalidSession() {
   return withCode("请求无效，会话已失效，请刷新页面后重试。", "INVALID_SESSION");
 }
 
@@ -182,7 +182,7 @@ export function validateHelloSpeechRequest(value: unknown): HelloSpeechRequest {
   };
 }
 
-function isUnresumableSessionError(error: unknown): boolean {
+export function isUnresumableSessionError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as { code?: unknown }).code;
   if (code === "INVALID_SESSION" || code === "SESSION_NOT_FOUND" || code === "NOT_FOUND") return true;
@@ -207,7 +207,7 @@ function releaseRequestSlot() {
   activeRequests--;
 }
 
-function sessionConfig() {
+export function sessionConfig() {
   return {
     systemMessage: { mode: "replace" as const, content: createSystemInstruction(getMaxQuestions()) },
     model: process.env.COPILOT_MODEL ?? "gpt-6-luna",
@@ -227,7 +227,7 @@ function sessionConfig() {
   };
 }
 
-function parseAssistantResponse(content: string): { response: string; status: HelloSpeechStatus } {
+export function parseAssistantResponse(content: string): { response: string; status: HelloSpeechStatus } {
   const match = content.match(statusMarker);
   return {
     response: (match ? content.slice(0, match.index ?? content.length) : content).trimEnd(),

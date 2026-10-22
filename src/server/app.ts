@@ -3,8 +3,11 @@ import express from "express";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { solveHelloSpeech, type HelloSpeechDependencies } from "./features/hello-speech/service.js";
+import { config as loadEnv } from "dotenv";
+import type { HelloSpeechDependencies } from "./features/hello-speech/service.js";
 import { validateNumbers } from "./features/twenty-four/validation.js";
+
+loadEnv({ path: fileURLToPath(new URL("./features/hello-speech/.env", import.meta.url)), quiet: true });
 
 const port = Number(process.env.PORT ?? 30001);
 const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
@@ -67,7 +70,16 @@ export function createApp(dependencies: { helloSpeech?: HelloSpeechDependencies 
   });
   app.post("/features/hello-speech", async (req, res) => {
     try {
-      res.json(await solveHelloSpeech(req.body, dependencies.helloSpeech));
+      const implementation = process.env.HELLO_SPEECH_SERVICE ?? "service";
+      const module = implementation === "service"
+        ? await import("./features/hello-speech/service.js")
+        : implementation === "service_graph"
+          ? await import("./features/hello-speech/service_graph.js")
+          : undefined;
+      if (!module) {
+        throw new Error("HELLO_SPEECH_SERVICE must be either 'service' or 'service_graph'.");
+      }
+      res.json(await module.solveHelloSpeech(req.body, dependencies.helloSpeech));
     } catch (error) {
       logRequestError("/features/hello-speech", error);
       const response = toErrorResponse(error);

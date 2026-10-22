@@ -10,6 +10,7 @@ import {
   type HelloSpeechSession,
   type HelloSpeechUsageEvent,
 } from "./features/hello-speech/service.js";
+import { solveHelloSpeech as solveHelloSpeechGraph } from "./features/hello-speech/service_graph.js";
 
 class FakeSession {
   readonly sessionId: string;
@@ -18,6 +19,7 @@ class FakeSession {
   shouldFail = false;
   responseContent = "bot reply";
   beforeResponse: (() => Promise<void>) | undefined;
+  readonly prompts: string[] = [];
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -30,7 +32,8 @@ class FakeSession {
     };
   }
 
-  async sendAndWait(_options: { prompt: string }, _timeout?: number) {
+  async sendAndWait(options: { prompt: string }, _timeout?: number) {
+    this.prompts.push(options.prompt);
     if (this.shouldFail) throw Object.assign(new Error("model failed"), { code: "MODEL" });
     await this.beforeResponse?.();
     this.usageHandler?.({
@@ -66,8 +69,8 @@ class FakeClient implements HelloSpeechClient {
   stopped = false;
   onStop: (() => void) | undefined;
 
-  constructor() {
-    this.createdSession = new FakeSession("generated-session");
+  constructor(sessionId = "generated-session") {
+    this.createdSession = new FakeSession(sessionId);
     this.resumedSession = new FakeSession("existing");
   }
 
@@ -84,7 +87,7 @@ class FakeClient implements HelloSpeechClient {
 
   async resumeSession(sessionId: string): Promise<HelloSpeechSession> {
     this.calls.push(`resume:${sessionId}`);
-    return this.resumedSession as unknown as HelloSpeechSession;
+    return (sessionId === this.createdSession.sessionId ? this.createdSession : this.resumedSession) as unknown as HelloSpeechSession;
   }
 
   async getSessionMetadata(_sessionId: string) {
@@ -220,10 +223,71 @@ test("creates a new chat without a session ID", async () => {
   const client = new FakeClient();
   const result = await solveHelloSpeech({ newChat: true }, { createClient: () => client });
 
-  assert.equal(result.response, "");
+  assert.equal(result.response, "bot reply");
   assert.equal(result.sessionId, "generated-session");
   assert.equal(result.status, "in_progress");
   assert.deepEqual(client.calls, ["create", "stop"]);
+});
+
+test("resumes the LangGraph interrupt with the next frontend input", async () => {
+  const client = new FakeClient();
+  client.metadata = {
+    sessionId: client.createdSession.sessionId,
+    startTime: new Date(),
+    modifiedTime: new Date(),
+    isRemote: false,
+  };
+  client.createdSession.responseContent = "Please tell me your name.\n[[CONVERSATION_IN_PROGRESS]]";
+
+  const first = await solveHelloSpeechGraph({ newChat: true }, { createClient: () => client });
+  assert.equal(first.response, "Please tell me your name.");
+  assert.equal(first.status, "in_progress");
+
+  client.createdSession.responseContent = "Welcome, Alex.\n[[CONVERSATION_IN_PROGRESS]]";
+  const next = await solveHelloSpeechGraph(
+    { input: "Alex", sessionId: first.sessionId },
+    { createClient: () => client },
+  );
+
+  assert.equal(next.response, "Welcome, Alex.");
+  assert.equal(next.sessionId, first.sessionId);
+  assert.equal(client.createdSession.prompts[1], "Alex");
+});
+
+test("selects the LangGraph service from configuration without changing the HTTP response shape", async () => {
+  const previousService = process.env.HELLO_SPEECH_SERVICE;
+  process.env.HELLO_SPEECH_SERVICE = "service_graph";
+  const client = new FakeClient("graph-http-session");
+  const server = createServer(createApp({ helloSpeech: { createClient: () => client } }));
+  await new Promise<void>((resolve) => server.listen(0, resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("test server did not start");
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/features/hello-speech`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ newChat: true }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(Object.keys(body).sort(), [
+      "cacheReadTokens",
+      "cacheWriteTokens",
+      "elapsedMs",
+      "inputTokens",
+      "model",
+      "outputTokens",
+      "response",
+      "sessionId",
+      "status",
+    ]);
+    assert.equal(body.response, "bot reply");
+    assert.equal(body.sessionId, "graph-http-session");
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    if (previousService === undefined) delete process.env.HELLO_SPEECH_SERVICE;
+    else process.env.HELLO_SPEECH_SERVICE = previousService;
+  }
 });
 
 test("returns completed status and removes the protocol marker", async () => {
