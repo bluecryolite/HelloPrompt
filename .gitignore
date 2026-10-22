@@ -8,3 +8,6 @@ dist
 .idea
 public
 src/server/features/hello-world/data
+
+# LangGraph API
+.langgraph_api

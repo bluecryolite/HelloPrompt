@@ -9,7 +9,6 @@ import {
     interrupt,
     isInterrupted,
 } from "@langchain/langgraph";
-import { ToolMessage } from "@langchain/core/messages";
 import { createAgent } from "langchain";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
@@ -65,7 +64,7 @@ const workflowState = Annotation.Root({
 });
 
 const client = createCopilotClient();
-const agent = createAgent({
+export const agent = createAgent({
     model: new CopilotChatModel(client),
     tools: [calcFactorial],
     systemPrompt: systemMessage,
@@ -95,16 +94,13 @@ const workflow = new StateGraph(workflowState)
         if (!finalMessage) {
             throw new Error("The agent returned no messages.");
         }
-        const calculationSucceeded = result.messages.some(
-            (message) => message instanceof ToolMessage && message.name === "calcFactorial",
-        );
-        const nextConversationHistory = calculationSucceeded
-            ? []
-            : [
-                ...conversationHistory,
+        const assistantAskedQuestion = /[?？]/u.test(finalMessage.text);
+        const nextConversationHistory = assistantAskedQuestion
+            ? [
                 { role: "user" as const, content: userMessage },
                 { role: "assistant" as const, content: finalMessage.text },
-            ];
+            ]
+            : [];
         return {
             aiResponse: finalMessage.text,
             conversationHistory: nextConversationHistory,
