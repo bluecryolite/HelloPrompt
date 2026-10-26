@@ -11,3 +11,4 @@ src/server/features/hello-world/data
 
 # LangGraph API
 .langgraph_api
+langgraph.json

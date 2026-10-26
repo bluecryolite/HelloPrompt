@@ -42,7 +42,7 @@ const speechState = Annotation.Root({
   }),
 });
 
-function createSpeechGraph(session: HelloSpeechSession) {
+export function createSpeechGraph(session: HelloSpeechSession) {
   return new StateGraph(speechState)
     .addNode("generateResponse", async ({ prompt }) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
+import { Command, MemorySaver } from "@langchain/langgraph";
 import { createApp } from "./app.js";
 import type { SessionConfig, SessionMetadata } from "@github/copilot-sdk";
 import { createSession } from "./features/hello-world/core.js";
@@ -11,6 +12,7 @@ import {
   type HelloSpeechUsageEvent,
 } from "./features/hello-speech/service.js";
 import { solveHelloSpeech as solveHelloSpeechGraph } from "./features/hello-speech/service_graph.js";
+import { createLangGraphSpeechGraph } from "./features/hello-speech/langgraph_entry.js";
 
 class FakeSession {
   readonly sessionId: string;
@@ -252,6 +254,27 @@ test("resumes the LangGraph interrupt with the next frontend input", async () =>
   assert.equal(next.response, "Welcome, Alex.");
   assert.equal(next.sessionId, first.sessionId);
   assert.equal(client.createdSession.prompts[1], "Alex");
+});
+
+test("standalone LangGraph entry persists the Copilot session and resumes the interrupt", async () => {
+  const client = new FakeClient("existing");
+  client.createdSession.responseContent = "Please tell me your name.\n[[CONVERSATION_IN_PROGRESS]]";
+  const graph = createLangGraphSpeechGraph(
+    { createClient: () => client },
+    new MemorySaver(),
+  );
+  const config = { configurable: { thread_id: "standalone-speech" } };
+
+  const first = await graph.invoke({ prompt: "Start training" }, config);
+  assert.equal(first.response, "Please tell me your name.");
+  assert.equal(first.sessionId, "existing");
+
+  client.createdSession.responseContent = "Welcome, Alex.\n[[CONVERSATION_IN_PROGRESS]]";
+  const second = await graph.invoke(new Command({ resume: "Alex" }), config);
+  assert.equal(second.response, "Welcome, Alex.");
+  assert.equal(second.sessionId, "existing");
+  assert.deepEqual(client.createdSession.prompts, ["Start training", "Alex"]);
+  assert.deepEqual(client.calls, ["create", "stop", "start", "metadata", "resume:existing", "stop"]);
 });
 
 test("selects the LangGraph service from configuration without changing the HTTP response shape", async () => {
