@@ -99,6 +99,18 @@ function releaseRequestSlot() {
   activeRequests--;
 }
 
+function isSpeechGraphOutput(value: unknown): value is {
+  response: string;
+  status: HelloSpeechStatus;
+  model: string;
+} {
+  if (!value || typeof value !== "object") return false;
+  const output = value as Record<string, unknown>;
+  return typeof output.response === "string"
+    && (output.status === "in_progress" || output.status === "completed")
+    && typeof output.model === "string";
+}
+
 export async function solveHelloSpeech(
   value: unknown,
   dependencies: HelloSpeechDependencies = {},
@@ -144,18 +156,53 @@ export async function solveHelloSpeech(
     });
 
     const graph = createSpeechGraph(session);
-    const graphConfig = { configurable: { thread_id: session.sessionId } };
+    const graphConfig = {
+      configurable: { thread_id: session.sessionId },
+      runName: "hello-speech",
+      tags: ["hello-speech"],
+      metadata: { feature: "hello-speech" },
+    };
     const startedAt = Date.now();
-    let result;
+    let graphInput;
     if ("sessionId" in request && request.sessionId !== undefined) {
       const checkpoint = await graph.getState(graphConfig);
       if (!checkpoint.next.includes("waitForUser")) throw invalidSession();
-      result = await graph.invoke(new Command({ resume: request.input }), graphConfig);
+      graphInput = new Command<
+        unknown,
+        { prompt?: string; response?: string; status?: HelloSpeechStatus; model?: string },
+        "__start__" | "generateResponse" | "waitForUser"
+      >({ resume: request.input });
     } else {
-      result = await graph.invoke({
+      graphInput = {
         prompt: "newChat" in request ? newChatPrompt : request.input,
-      }, graphConfig);
+      };
     }
+
+    let graphOutput: unknown;
+    const events = await graph.streamEvents(graphInput, { ...graphConfig, version: "v2" });
+    for await (const event of events) {
+      const dataFields = event.data && typeof event.data === "object"
+        ? Object.keys(event.data)
+        : [];
+      console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        type: "langchain.stream_event",
+        feature: "hello-speech",
+        event: event.event,
+        name: event.name,
+        run_id: event.run_id,
+        tags: event.tags,
+        metadata: event.metadata,
+        data_fields: dataFields,
+      }));
+      if (event.event === "on_chain_end" && event.name === graphConfig.runName) {
+        graphOutput = event.data.output;
+      }
+    }
+    if (!isSpeechGraphOutput(graphOutput)) {
+      throw withCode("图执行没有返回有效结果。", "GRAPH_OUTPUT");
+    }
+    const result = graphOutput;
 
     return {
       response: result.response,
