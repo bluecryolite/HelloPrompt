@@ -3,6 +3,7 @@ client/node_modules
 server/node_modules
 dist
 .env
+.venv
 .copilot
 .DS_Store
 .idea

@@ -12,9 +12,18 @@ import {
 import { createAgent } from "langchain";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config as loadEnv } from "dotenv";
 import { z } from "zod";
 import { createCopilotClient } from "./core.js";
+import { systemMessage } from "./factorial-assistant-prompt.js";
 import { CopilotChatModel } from "./lang-chatnormal-model.js";
+import { createCopilotJudge, evaluateGoalAccuracy, evaluationMessages, type EvaluationMessage } from "./ragas-evaluation.js";
+
+const featureDirectory = dirname(fileURLToPath(import.meta.url));
+loadEnv({ path: resolve(featureDirectory, ".env"), quiet: true });
+loadEnv({ path: resolve(featureDirectory, "../../../../.env"), quiet: true });
 
 const calcFactorial = tool(
     async ({ no }) => {
@@ -36,13 +45,6 @@ const calcFactorial = tool(
     },
 );
 
-const systemMessage = `You are a factorial assistant.
-Use calcFactorial for every factorial calculation; do not calculate factorials from your own knowledge.
-For multiple numbers, call the tool once for each number. For a range, include every integer from the start through the end, inclusive, in order. For example, "from one to four" requires calls for 1, 2, 3, and 4.
-After the tool calls complete, list each number and its individual result in order.
-If the user provides no number, ask for one without using your own knowledge.
-If the request is not about calculating a factorial, ask for clarification without using your own knowledge.`;
-
 type ConversationTurn = {
     role: "user" | "assistant";
     content: string;
@@ -58,6 +60,10 @@ const workflowState = Annotation.Root({
         default: () => "",
     }),
     conversationHistory: Annotation<ConversationTurn[]>({
+        reducer: (_current, next) => next,
+        default: () => [],
+    }),
+    evaluationTrace: Annotation<EvaluationMessage[]>({
         reducer: (_current, next) => next,
         default: () => [],
     }),
@@ -104,6 +110,7 @@ const workflow = new StateGraph(workflowState)
         return {
             aiResponse: finalMessage.text,
             conversationHistory: nextConversationHistory,
+            evaluationTrace: evaluationMessages(conversationHistory, userMessage, result.messages),
         };
     })
     .addEdge(START, "getUserInput")
@@ -117,6 +124,7 @@ const workflow = new StateGraph(workflowState)
 
 const readline = createInterface({ input: stdin, output: stdout });
 const config = { configurable: { thread_id: "hello-world015-console" } };
+const evaluationModel = process.env.RAGAS_EVALUATION_MODEL || "gpt-6.1-terra";
 
 console.log("Factorial Assistant (Type 'exit' to quit)");
 console.log("Example: Calculate the factorial of 5 and 6.");
@@ -135,6 +143,19 @@ try {
         if (userMessage.trim().toLowerCase() === "exit") break;
 
         console.log(`Assistant: ${result.aiResponse}\n`);
+        try {
+            const evaluation = await evaluateGoalAccuracy(
+                result.evaluationTrace,
+                systemMessage,
+                (prompt) => createCopilotJudge(client, evaluationModel, prompt),
+            );
+            console.log(`RAGAS AgentGoalAccuracyWithoutReference, system-aware (${evaluationModel}): ${evaluation.score}`);
+            console.log(`  user_goal: ${evaluation.userGoal}`);
+            console.log(`  end_state: ${evaluation.endState}`);
+            console.log(`  reason: ${evaluation.reason}\n`);
+        } catch (error) {
+            console.error("RAGAS evaluation failed:", error);
+        }
     }
 } finally {
     readline.close();

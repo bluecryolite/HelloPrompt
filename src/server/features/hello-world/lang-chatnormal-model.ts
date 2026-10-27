@@ -144,7 +144,7 @@ class CopilotChatModel extends BaseChatModel {
                 "Choose whether to call one of the available tools or answer without a tool.",
                 "Return only one JSON object, with no markdown or extra text.",
                 'For one or more tool calls, use {"action":"tools","calls":[{"name":"<tool name>","args":{...}}]}.',
-                "For multiple requested numbers, make one tool call for each number. Include both endpoints and every integer in a requested range, in order.",
+                "For multiple requested numbers, make one tool call for each number. Select range values according to the user request and system instructions.",
                 'For example, "from one to four" requires calls with no values 1, 2, 3, and 4.',
                 'For a direct answer, use {"action":"final","content":"<answer>"}.',
                 `Available tools:\n${JSON.stringify(this.boundTools.map((tool) => ({
