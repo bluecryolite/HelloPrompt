@@ -26,6 +26,34 @@ type ToolDecision =
     | { action: "tool"; name: string; args: Record<string, unknown> }
     | { action: "final"; content: string };
 
+export type CopilotUsageObserver = {
+    onUsage?: (usage: {
+        model: string;
+        inputTokens?: number;
+        outputTokens?: number;
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+    }) => void;
+    onModelCallFailure?: (model: string | undefined) => void;
+};
+
+export type CopilotChatModelOptions = {
+    usageObserver?: CopilotUsageObserver;
+    requestTimeoutMs?: number;
+};
+
+type CopilotRequestUsage = {
+    model?: string;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+};
+
+function addTokenCount(current: number | undefined, next: number | undefined): number | undefined {
+    return next === undefined ? current : (current ?? 0) + next;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -80,11 +108,18 @@ class CopilotChatModel extends BaseChatModel {
     private session: CopilotSession | null = null;
     private sessionConfig: SessionConfig;
     private boundTools: StructuredTool[] = [];
+    private options: CopilotChatModelOptions;
 
-    constructor(client: CopilotClient, sessionConfig = {} as SessionConfig, fields?: BaseChatModelParams) {
+    constructor(
+        client: CopilotClient,
+        sessionConfig = {} as SessionConfig,
+        fields?: BaseChatModelParams,
+        options: CopilotChatModelOptions = {},
+    ) {
         super(fields ?? {});
         this.client = client;
         this.sessionConfig = sessionConfig;
+        this.options = options;
     }
 
     bindTools(
@@ -96,7 +131,7 @@ class CopilotChatModel extends BaseChatModel {
         );
 
         // 创建一个新的 CopilotChatModel 实例，并复制当前配置
-        const boundModel = new CopilotChatModel(this.client, this.sessionConfig);
+        const boundModel = new CopilotChatModel(this.client, this.sessionConfig, undefined, this.options);
         boundModel.boundTools = structuredTools;
 
         return boundModel;
@@ -237,23 +272,93 @@ class CopilotChatModel extends BaseChatModel {
                     }
                     : {}),
             });
+            this.session.on("assistant.usage", ({ data }) => {
+                this.options.usageObserver?.onUsage?.({
+                    model: data.model,
+                    inputTokens: data.inputTokens,
+                    outputTokens: data.outputTokens,
+                    cacheReadTokens: data.cacheReadTokens,
+                    cacheWriteTokens: data.cacheWriteTokens,
+                });
+            });
+            this.session.on("model.call_failure", ({ data }) => {
+                this.options.usageObserver?.onModelCallFailure?.(data.model);
+            });
         }
 
-        console.log("Messages to Copilot:", messages);
+        // console.log("Messages to Copilot:", messages);
 
         const prompt = userMessage.text;
         console.log("Prompt to Copilot:", prompt);
-        const response = await this.session.sendAndWait({ prompt: prompt });
+        const session = this.session;
+        if (!session) {
+            throw new Error("CopilotChatModel failed to create a session.");
+        }
+        const requestUsage: CopilotRequestUsage = {};
+        const response = await (async () => {
+            const unsubscribeUsage = session.on("assistant.usage", ({ data }) => {
+                requestUsage.model = data.model;
+                requestUsage.inputTokens = addTokenCount(requestUsage.inputTokens, data.inputTokens);
+                requestUsage.outputTokens = addTokenCount(requestUsage.outputTokens, data.outputTokens);
+                requestUsage.cacheReadTokens = addTokenCount(requestUsage.cacheReadTokens, data.cacheReadTokens);
+                requestUsage.cacheWriteTokens = addTokenCount(requestUsage.cacheWriteTokens, data.cacheWriteTokens);
+            });
+            try {
+                return await session.sendAndWait(
+                    { prompt: prompt },
+                    this.options.requestTimeoutMs ?? 60_000,
+                );
+            } finally {
+                unsubscribeUsage();
+            }
+        })();
         const text = response?.data?.content ?? "";
-        console.log("Response from Copilot:", response);
+        const model = requestUsage.model ?? response?.data.model;
+        const inputTokens = requestUsage.inputTokens;
+        const outputTokens = requestUsage.outputTokens ?? response?.data.outputTokens;
+        const cacheReadTokens = requestUsage.cacheReadTokens;
+        const cacheWriteTokens = requestUsage.cacheWriteTokens;
+        console.log("Response from Copilot:", {
+            model,
+            inputTokens,
+            outputTokens,
+            ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+            ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+        });
+
+        const inputTokenDetails = {
+            ...(cacheReadTokens === undefined ? {} : { cache_read: cacheReadTokens }),
+            ...(cacheWriteTokens === undefined ? {} : { cache_creation: cacheWriteTokens }),
+        };
+        const usageMetadata = inputTokens === undefined || outputTokens === undefined
+            ? undefined
+            : {
+                input_tokens: inputTokens,
+                output_tokens: outputTokens,
+                total_tokens: inputTokens + outputTokens,
+                ...(Object.keys(inputTokenDetails).length === 0 ? {} : { input_token_details: inputTokenDetails }),
+            };
+        const tokenUsage = usageMetadata
+            ? {
+                promptTokens: usageMetadata.input_tokens,
+                completionTokens: usageMetadata.output_tokens,
+                totalTokens: usageMetadata.total_tokens,
+                ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+                ...(cacheWriteTokens === undefined ? {} : { cacheWriteTokens }),
+            }
+            : undefined;
 
         return {
             generations: [
                 {
                     text,
-                    message: new AIMessage(text),
+                    message: new AIMessage({
+                        content: text,
+                        ...(usageMetadata ? { usage_metadata: usageMetadata } : {}),
+                    }),
                 },
             ],
+            ...(tokenUsage ? { llmOutput: { tokenUsage } } : {}),
         };
     }
 }
